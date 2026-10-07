@@ -1674,6 +1674,33 @@ on staging".
 
 ---
 
+## DEC-089 — A demo link for the owner's phone, on Base44
+
+Status:
+Accepted (2026-10-07)
+
+Decision:
+The owner asked to see the app on their phone through a link, and for it
+to be on Base44. Until staging is live, that link is a **demo**: the real
+app's web build in development mode (mock backend, development panel
+visible, nothing sent anywhere), published as a Base44 app
+(https://velvet-7078da56.base44.app) and, as its always-current source, a
+Render static site (https://velvet-demo.onrender.com) rebuilt from `main`.
+- It is the same code as the app — not a Base44 re-creation. Base44 hosts
+  the prebuilt files; its builder AI is not used on this app (a builder
+  turn would overwrite them).
+- It is not staging (DEC-086 stands for invited friends: the staging web
+  link and TestFlight, with real SMS, review and storage). The demo never
+  collects applications: answers and photos stay in the visitor's browser.
+- The QA photographs in `e2e/fixtures` are not used (their licence note
+  limits them to tests), so the demo's member community has no fixture
+  members.
+- Moving the product itself onto Base44 (its database, login and hosting
+  instead of the API, PostgreSQL and S3) would replace the admission
+  architecture and its privacy model; it is not decided.
+
+---
+
 # Pending Decisions
 
 The following are intentionally not finalized yet:

@@ -44,6 +44,26 @@ In addition:
   BYPASSRLS role or the schema owner (DEC-074).
 - Production additionally refuses test numbers and every `test:*` scope.
 
+### 1.1 The demo link (not an environment; DEC-089)
+
+To see the app on a phone before staging is live, the owner has a **demo**:
+the real app's web build in development mode — the in-app mock backend,
+the development panel visible ("Development build — use 246810" on the code
+screen, "simulate review" on the status screen). Nothing leaves the phone:
+there is no server, every answer and photo stays in that browser's storage.
+It is not staging and never collects applications.
+
+| Where | What |
+|---|---|
+| https://velvet-7078da56.base44.app | Base44 app "Velvet" (`6ac6ad0b37bcdf887078da56`), public, not embeddable — a **snapshot**: the prebuilt files sit in the app's `public/` with the build's `index.html` (Base44 adds a token helper and a page-name visit logger) |
+| https://velvet-demo.onrender.com | Render static site `velvet-demo` (`srv-db3aplad0e5s73fm9qlg`) — rebuilt from `main` on every push, also publishes `velvet-demo.tar.gz`, the archive the Base44 copy is refreshed from |
+
+Refreshing the Base44 copy: in the Base44 app sandbox (`/app`), download
+`velvet-demo.tar.gz` from the Render site, replace `public/_expo`,
+`public/assets` and `index.html`, check `vite build`, create a checkpoint
+and deploy it. (`public/assets/node_modules/` is re-included in the app's
+`.gitignore`: the build keeps its fonts there.)
+
 ## 2. Architecture
 
 ```
