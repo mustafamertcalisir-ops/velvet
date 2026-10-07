@@ -659,7 +659,7 @@ What exists is code-level semantics only. On the new screen:
 
 **Secret scan (PASS):** 9 committed files, 323 working-tree files and 1 commit of history — no secrets found. The scanner was checked against a planted secret in deleted history.
 
-**Status: BLOCKED.** No GitHub repository or Environment exists, so the workflow has never run on GitHub. Every command in it was run locally.
+**Status: `verify` PASS on GitHub; deploy jobs BLOCKED.** The private repository `mustafamertcalisir-ops/velvet` exists (2026-10-07). The first push to `main` (c5f4288) ran the workflow on GitHub Actions: `verify` **passed in 6 min 19 s** (secret scan, app and server typecheck/lint/tests on PostgreSQL 16, build, the staging-shaped rehearsal, the bundle gate). `deploy-staging`, `race` and `deletion` correctly stopped at "Staging is not configured yet (GitHub Environment 'staging'): nothing deployed" — the Environment, Render and AWS do not exist yet. (Run 37681355510. GitHub warns that `actions/checkout@v4` / `setup-node@v4` target Node 20, now run on Node 24 — no effect yet.)
 
 ## REAL STAGING SMOKE RESULT
 
@@ -693,7 +693,7 @@ Each item below waits on something only the project owner can create (INFRASTRUC
 | Managed PostgreSQL; PITR restore test into a new instance | the Render account (above) |
 | S3 buckets, IAM/OIDC, CORS; **real signed upload/download test**; reconciliation on S3 | an **AWS account for staging**, with billing alerts |
 | Real SMS; **real OTP test** | a **Netgsm** company subscription, an approved sender header, an OTP package and a staging API sub-user; **≥ 2 project-owned Turkish SIMs** |
-| CI/CD on GitHub | a **GitHub repository** with Actions and an Environment `staging` holding the secrets and variables named in the workflow |
+| CI/CD deploy jobs on GitHub (the repository exists and `verify` passes) | the GitHub Environment `staging` holding the secrets and variables named in the workflow (after Render and AWS exist) |
 | Staging app builds | an **Expo/EAS account**; Apple Developer and Google Play accounts for internal testing |
 | iPhone, Android, VoiceOver, TalkBack and Dynamic Type QA | **one iPhone and one Android phone** with the staging build |
 
