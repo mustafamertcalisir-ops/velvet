@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RenderStagingApiOnly",
+      "Effect": "Allow",
+      "Principal": { "Federated": "arn:aws:iam::${STAGING_ACCOUNT_ID}:oidc-provider/oidc.render.com/${RENDER_WORKSPACE_ID}" },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": { "oidc.render.com/${RENDER_WORKSPACE_ID}:aud": "sts.amazonaws.com" },
+        "StringLike": {
+          "oidc.render.com/${RENDER_WORKSPACE_ID}:sub": "workspace:${RENDER_WORKSPACE_ID}:environment:${RENDER_STAGING_ENVIRONMENT_ID}:service:${RENDER_API_SERVICE_ID}"
+        }
+      }
+    }
+  ]
+}

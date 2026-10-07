@@ -1,0 +1,6 @@
+{
+  "LoggingEnabled": {
+    "TargetBucket": "${LOG_BUCKET}",
+    "TargetPrefix": "verification/"
+  }
+}

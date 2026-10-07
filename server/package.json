@@ -1,0 +1,41 @@
+{
+  "name": "velvet-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Production API for the private-membership app: admission, membership, member product. PostgreSQL + Node.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.mjs",
+    "build": "node scripts/build.mjs",
+    "migrate": "tsx src/db/migrate-cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "docs:security": "tsx scripts/security-matrix.ts",
+    "migrate:verify": "tsx src/db/migrate-cli.ts --verify",
+    "rehearse:staging": "npm run build && node scripts/rehearse-staging.mjs",
+    "smoke": "node dist/smoke.mjs",
+    "test:storage:provider": "STORAGE_PROVIDER_TEST=1 vitest run test/storage.provider.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
+    "@hono/node-server": "^2.1.3",
+    "hono": "^4.13.13",
+    "pg": "^8.23.1",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
+    "s3rver": "^3.7.1",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

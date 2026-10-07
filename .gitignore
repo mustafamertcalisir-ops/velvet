@@ -39,3 +39,28 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# build + QA output
+dist/
+dist-native/
+e2e/screenshots/
+dist-prod/
+
+# secrets and environment files (DEC-079): only *.example files are committed
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# staging tooling output (QA session tokens, canary values) — never committed, never uploaded
+.staging-state.json
+.staging-canaries.json
+.staging-otp-canaries.json
+*.dump
+server/.media/
+
+# Generated CloudFormation templates (identifiers only, but per-account)
+infra/aws/out/
+# Staging tool outputs
+.staging-db-checks.json
+dist-staging/

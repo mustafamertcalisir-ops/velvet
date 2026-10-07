@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MediaObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": [
+        "arn:aws:s3:::${MEDIA_BUCKET}/incoming/*",
+        "arn:aws:s3:::${MEDIA_BUCKET}/application/*",
+        "arn:aws:s3:::${MEDIA_BUCKET}/member/*"
+      ]
+    },
+    {
+      "Sid": "VerificationObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": [
+        "arn:aws:s3:::${VERIFICATION_BUCKET}/incoming/*",
+        "arn:aws:s3:::${VERIFICATION_BUCKET}/verification/*"
+      ]
+    },
+    {
+      "Sid": "ListForReconciliationAndReadiness",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::${MEDIA_BUCKET}", "arn:aws:s3:::${VERIFICATION_BUCKET}"]
+    }
+  ]
+}

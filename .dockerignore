@@ -1,0 +1,14 @@
+# Build context for server/Dockerfile (the API image): only server/ and the shared src/ are used.
+**/node_modules
+dist
+dist-*
+server/dist
+server/.media
+server/test/.out
+.expo
+e2e
+docs
+assets
+**/.env
+**/.env.*
+!server/.env.example

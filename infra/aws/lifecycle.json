@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "raw-uploads-expire",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "incoming/" },
+      "Expiration": { "Days": 1 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}

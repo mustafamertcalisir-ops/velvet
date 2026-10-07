@@ -1,0 +1,244 @@
+# Manual STAGING provider checks (DEC-082, docs/STAGING.md §8). Never production:
+# every job runs in the GitHub Environment "staging" and every tool refuses a
+# non-staging API. Run from Actions → staging-checks → Run workflow.
+#
+#   storage        the REAL S3 suite (server/test/storage.provider.test.ts) and a real
+#                  browser upload (e2e/storage-cors.mjs), signed in to AWS with GitHub's
+#                  OIDC token as velvet-staging-storage-test (test-shaped keys only).
+#                  No AWS key exists anywhere.
+#   seed           the QA community (scripts/qa-seed.ts): every applicant state, a
+#                  compatible pair, incompatible gender and age, a blocked pair, a
+#                  matched pair, a non-Dating member. Repeatable.
+#   reconcile      media reconciliation DRY RUN inside Render (counts, opaque keys).
+#   fault-drill    suspends the staging DATABASE, watches readiness fail (503) while
+#                  liveness holds, resumes it, watches readiness recover. Staging is
+#                  unavailable for a few minutes.
+#   restore-drill  point-in-time recovery into a NEW instance, verified from the
+#                  runner, then that instance is deleted. Never touches the live one.
+#   sms-outage-drill  points the Netgsm adapter at an unreachable host for one deploy,
+#                  requests a code for the project SIM (nothing can be sent), expects the
+#                  safe "couldn't send a code" error, then restores and redeploys.
+#   review-fixture the reviewer side of a REAL-SIM journey: the tester signs in and applies
+#                  in the staging app on the phone (real SMS, real uploads); this moves the
+#                  SIM's QA application (START_REVIEW, REQUEST_EXTENDED, APPROVE, ACTIVATE …)
+#                  and prints each transition's request id. The SIM must be listed in the
+#                  server's SMS_QA_REAL_NUMBERS.
+#   log-review     Render's API log since `since` through the log scan — e.g. after the
+#                  operator's real-SMS check, whose codes exist nowhere but on the phone
+#                  (the scan flags any six-digit number on an authentication line).
+#
+# Environment "staging": the variables and secrets listed in staging.yml, plus
+#   variables AWS_STORAGE_TEST_ROLE_ARN · S3_BUCKET · S3_VERIFICATION_BUCKET · STAGING_WEB_ORIGIN (optional)
+#   secrets   STAGING_REAL_PHONE · STAGING_REAL_PHONE_2 (the project SIMs: outage drill, review fixture)
+name: staging-checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      check:
+        description: Which check
+        required: true
+        type: choice
+        options: [storage, seed, reconcile, fault-drill, restore-drill, sms-outage-drill, review-fixture, log-review]
+      confirm:
+        description: For the drills, type the check's name again
+        required: false
+        default: ''
+      since:
+        description: For log-review, the start of the window (UTC, e.g. 2026-10-08T09:00:00Z)
+        required: false
+        default: ''
+      action:
+        description: For review-fixture
+        required: false
+        type: choice
+        default: STATUS
+        options: [STATUS, START_REVIEW, REQUEST_EXTENDED, REQUEST_IDENTITY, APPROVE, WAITLIST, NOT_ADMIT, ACTIVATE]
+      sim:
+        description: For review-fixture, which project SIM (1 = STAGING_REAL_PHONE, 2 = STAGING_REAL_PHONE_2)
+        required: false
+        type: choice
+        default: '1'
+        options: ['1', '2']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-checks
+  cancel-in-progress: false
+
+jobs:
+  storage:
+    if: inputs.check == 'storage'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write # GitHub's OIDC token → AWS STS; nothing else
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - name: PostgreSQL 16 binaries (the test runner's global setup starts one; the storage test does not use it)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-16
+          sudo systemctl stop postgresql || true
+      - run: npm ci && npm ci --prefix server
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_STORAGE_TEST_ROLE_ARN }}
+          aws-region: eu-central-1
+          role-session-name: velvet-staging-storage-test
+      - name: Real S3 — signed upload/download, expiry, tampering, type, length, privacy, bucket separation
+        working-directory: server
+        env:
+          STORAGE_PROVIDER_TEST: '1'
+          S3_REGION: eu-central-1
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_VERIFICATION_BUCKET: ${{ vars.S3_VERIFICATION_BUCKET }}
+          STORAGE_TEST_ALLOWED_ORIGIN: ${{ vars.STAGING_WEB_ORIGIN }}
+        run: npx vitest run test/storage.provider.test.ts
+      - name: Real browser upload (CORS) — the staging web origin only, or no origin at all
+        env:
+          S3_REGION: eu-central-1
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          STAGING_WEB_ORIGIN: ${{ vars.STAGING_WEB_ORIGIN }}
+        run: |
+          npx playwright-core install --with-deps chromium
+          node e2e/storage-cors.mjs
+
+  seed:
+    if: inputs.check == 'seed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    env:
+      STAGING_ENVIRONMENT: staging
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_KEY_ID: ${{ vars.STAGING_KEY_ID }}
+      STAGING_KEY_SECRET: ${{ secrets.STAGING_KEY_SECRET }}
+      STAGING_PHONE_PREFIX: ${{ vars.STAGING_PHONE_PREFIX }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server && npm --prefix server run build
+      - run: node server/dist/qa-seed.mjs seed
+
+  reconcile:
+    if: inputs.check == 'reconcile'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Media reconciliation DRY RUN inside Render (nothing is deleted)
+        run: node server/scripts/render-ops.mjs job "node dist/ops.mjs reconcile"
+
+  fault-drill:
+    if: inputs.check == 'fault-drill' && inputs.confirm == 'fault-drill'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    env:
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_POSTGRES_ID: ${{ vars.RENDER_POSTGRES_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: node server/scripts/render-ops.mjs fault-drill
+
+  restore-drill:
+    if: inputs.check == 'restore-drill' && inputs.confirm == 'restore-drill'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: staging
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      RENDER_POSTGRES_ID: ${{ vars.RENDER_POSTGRES_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server && npm --prefix server run build
+      - run: node server/scripts/render-ops.mjs restore-drill
+
+  log-review:
+    if: inputs.check == 'log-review'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: staging
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      SINCE: ${{ inputs.since }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server && npm --prefix server run build
+      - name: Render's API log through the log scan (no canary file needed for codes)
+        run: |
+          node server/scripts/render-ops.mjs logs --since "${SINCE:-$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)}" --out "$RUNNER_TEMP/api.log"
+          node server/dist/log-scan.mjs "$RUNNER_TEMP/api.log"
+
+  sms-outage-drill:
+    if: inputs.check == 'sms-outage-drill' && inputs.confirm == 'sms-outage-drill'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: staging
+    env:
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_REAL_PHONE: ${{ secrets.STAGING_REAL_PHONE }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: node server/scripts/render-ops.mjs sms-outage-drill
+
+  review-fixture:
+    if: inputs.check == 'review-fixture'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: staging
+    env:
+      STAGING_ENVIRONMENT: staging
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_KEY_ID: ${{ vars.STAGING_KEY_ID }}
+      STAGING_KEY_SECRET: ${{ secrets.STAGING_KEY_SECRET }}
+      STAGING_PHONE_PREFIX: ${{ vars.STAGING_PHONE_PREFIX }}
+      STAGING_REAL_PHONE: ${{ inputs.sim == '2' && secrets.STAGING_REAL_PHONE_2 || secrets.STAGING_REAL_PHONE }}
+      ACTION: ${{ inputs.action }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server && npm --prefix server run build
+      - run: node server/dist/review-fixture.mjs "$ACTION"

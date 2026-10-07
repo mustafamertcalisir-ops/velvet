@@ -1,0 +1,11 @@
+{
+  "CORSRules": [
+    {
+      "ID": "staging-web-direct-upload",
+      "AllowedOrigins": ["${STAGING_WEB_ORIGIN}"],
+      "AllowedMethods": ["PUT"],
+      "AllowedHeaders": ["content-type"],
+      "MaxAgeSeconds": 600
+    }
+  ]
+}

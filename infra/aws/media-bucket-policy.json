@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TlsOnly",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::${MEDIA_BUCKET}", "arn:aws:s3:::${MEDIA_BUCKET}/*"],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+    },
+    {
+      "Sid": "OnlyTheStagingApiAndBreakGlassTouchObjects",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::${MEDIA_BUCKET}/*",
+      "Condition": {
+        "ArnNotEquals": {
+          "aws:PrincipalArn": ["arn:aws:iam::${STAGING_ACCOUNT_ID}:role/velvet-staging-api", "arn:aws:iam::${STAGING_ACCOUNT_ID}:role/${BREAK_GLASS_ROLE}"]
+        }
+      }
+    },
+    {
+      "Sid": "PresignedReadsDieWithTheirTtl",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${MEDIA_BUCKET}/*",
+      "Condition": { "StringEquals": { "s3:authType": "REST-QUERY-STRING" }, "NumericGreaterThan": { "s3:signatureAge": "900000" } }
+    },
+    {
+      "Sid": "PresignedUploadsDieWithTheirTtl",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${MEDIA_BUCKET}/*",
+      "Condition": { "StringEquals": { "s3:authType": "REST-QUERY-STRING" }, "NumericGreaterThan": { "s3:signatureAge": "600000" } }
+    }
+  ]
+}

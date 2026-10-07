@@ -1,22 +1,81 @@
 {
-  "name": "velvet",
+  "name": "velvet-admission",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "dependencies": {
+    "@expo-google-fonts/instrument-sans": "^0.4.2",
+    "@expo-google-fonts/newsreader": "^0.4.1",
+    "@expo/metro-runtime": "~57.0.16",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.26",
+    "expo-asset": "~57.0.18",
+    "expo-blur": "~57.0.3",
+    "expo-constants": "~57.0.20",
+    "expo-font": "~57.0.4",
+    "expo-haptics": "~57.0.3",
+    "expo-image": "~57.0.5",
+    "expo-image-manipulator": "~57.0.20",
+    "expo-image-picker": "~57.0.20",
+    "expo-linear-gradient": "~57.0.2",
+    "expo-linking": "~57.0.11",
+    "expo-router": "~57.0.24",
+    "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
+    "libphonenumber-js": "^1.13.14",
     "react": "19.2.3",
-    "react-native": "0.86.3"
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
+    "@testing-library/react-native": "^14.0.1",
     "@types/react": "~19.2.2",
-    "typescript": "~6.0.3"
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "^57.0.2",
+    "playwright-core": "^1.63.0",
+    "typescript": "~6.0.3",
+    "jest": "~29.7.0",
+    "jest-expo": "~57.0.5",
+    "@types/jest": "29.5.14"
   },
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "lint": "expo lint",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "build:web": "expo export -p web",
+    "build:native-bundles": "expo export -p ios -p android --output-dir dist-native",
+    "e2e": "node e2e/run.mjs",
+    "verify": "npm run typecheck && npm run lint && npm test -- --ci && npm run server:typecheck && npm run server:test && npm run server:build && npm run build:web:qa && npm run build:web:prod && npm run check:release:local && npm run e2e",
+    "build:web:qa": "EXPO_PUBLIC_ADMISSION_DEV_HOOKS=1 expo export -p web --clear --output-dir dist",
+    "build:web:prod": "EXPO_PUBLIC_APP_ENV=production EXPO_PUBLIC_API_URL=${EXPO_PUBLIC_API_URL:-http://127.0.0.1:8788} expo export -p web --clear --output-dir dist-prod",
+    "check:release": "node scripts/check-release-bundle.mjs dist-prod",
+    "check:release:local": "node scripts/check-release-bundle.mjs dist-prod --allow-local-api",
+    "server:typecheck": "npm --prefix server run typecheck",
+    "server:test": "npm --prefix server test",
+    "server:build": "npm --prefix server run build",
+    "eas-build-post-install": "node scripts/check-build-env.mjs"
   },
-  "private": true
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/e2e/",
+      "/dist",
+      "/server/"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg|libphonenumber-js)"
+    ],
+    "modulePathIgnorePatterns": [
+      "<rootDir>/server/"
+    ]
+  }
 }

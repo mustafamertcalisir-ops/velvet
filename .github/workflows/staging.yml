@@ -1,0 +1,264 @@
+# CI/CD — STAGING ONLY (DEC-079, docs/STAGING.md §3).
+#
+#   verify          typecheck · lint · app tests · server tests (real PostgreSQL 16) ·
+#                   server build · secret scan (tree + history) · migrations from a
+#                   clean database + checksum verification + the full local
+#                   staging-shaped rehearsal
+#   deploy-staging  (main only, after verify) Render deploy hook for this commit →
+#                   Render runs `node dist/migrate.mjs` BEFORE traffic moves →
+#                   readiness → schema check inside Render → real smoke → staging
+#                   suites + database assertions (with a redeploy in the middle to
+#                   prove persistence and the existing-schema release step) →
+#                   cleanup → log review of Render's API log
+#   race            (after deploy) LIKE/BLOCK in both orders + simultaneous rounds,
+#                   database assertions, log review — its own runner (OTP budget)
+#   deletion        (after deploy) account deletion against a live match, database
+#                   assertions, retention DRY RUN inside Render, log review
+#
+# Manual provider checks (real S3 with GitHub OIDC, QA seed, reconciliation,
+# database fault drill, point-in-time restore drill): staging-checks.yml.
+#
+# There is no production job, no production secret and no production deploy
+# hook in this repository. Store publishing is not automated.
+#
+# Secrets/variables live in the GitHub Environment "staging" (Settings →
+# Environments), never in this file:
+#   secrets   RENDER_DEPLOY_HOOK_URL · RENDER_API_KEY · STAGING_KEY_SECRET
+#   variables STAGING_API_URL · STAGING_KEY_ID · STAGING_PHONE_PREFIX ·
+#             RENDER_SERVICE_ID · RENDER_OWNER_ID · RENDER_POSTGRES_ID
+# Until STAGING_API_URL exists the deploy jobs stop at their first step (not configured).
+name: staging
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the secret scan reads the whole history
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - name: PostgreSQL 16 binaries (tests start their own ephemeral cluster)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-16 postgresql-client-16
+          sudo systemctl stop postgresql || true
+      - run: npm ci
+      - run: npm ci --prefix server
+      - name: Secret scan — working tree and git history
+        run: node scripts/secret-scan.mjs
+      - name: App — typecheck, lint, tests
+        run: npm run typecheck && npm run lint && npm test -- --ci
+      - name: Server — typecheck, tests (real PostgreSQL; the real-provider storage test reports BLOCKED without credentials)
+        run: npm run server:typecheck && npm run server:test
+      - name: Server — build
+        run: npm run server:build
+      - name: Staging-shaped rehearsal — migrations 0001→latest on a clean TLS database, checksums, runtime role, smoke, suites, faults, backup/restore, log review
+        run: npm --prefix server run rehearse:staging
+      - name: Release bundle gate (staging channel)
+        env:
+          EXPO_PUBLIC_APP_ENV: production
+          EXPO_PUBLIC_RELEASE_CHANNEL: staging
+          EXPO_PUBLIC_API_URL: https://api-staging.example.invalid
+        run: npx expo export -p web --clear --output-dir dist-staging && node scripts/check-release-bundle.mjs dist-staging --channel staging
+
+  deploy-staging:
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: staging
+    env:
+      STAGING_ENVIRONMENT: staging
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_KEY_ID: ${{ vars.STAGING_KEY_ID }}
+      STAGING_KEY_SECRET: ${{ secrets.STAGING_KEY_SECRET }}
+      STAGING_PHONE_PREFIX: ${{ vars.STAGING_PHONE_PREFIX }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      RENDER_POSTGRES_ID: ${{ vars.RENDER_POSTGRES_ID }}
+    steps:
+      - name: Staging configured?
+        id: cfg
+        run: |
+          if [ -z "$STAGING_API_URL" ] || [ -z "$RENDER_SERVICE_ID" ]; then
+            echo "::notice::Staging is not configured yet (GitHub Environment 'staging'): nothing deployed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ready == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - if: steps.cfg.outputs.ready == 'true'
+        run: npm ci --prefix server && npm --prefix server run build
+      - name: Deploy this commit (release step runs before traffic moves) and wait until live
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: node server/scripts/deploy-staging.mjs
+      - name: Readiness
+        if: steps.cfg.outputs.ready == 'true'
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 6 --retry-all-errors "$STAGING_API_URL/health/ready"
+      - name: Schema inside Render (one-off job, runtime login, read-only)
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs job "node dist/db-check.mjs schema"
+      - name: Real smoke against deployed staging
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/dist/smoke.mjs
+      - name: Staging suites (before restart)
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          STAGING_STATE_FILE: ${{ runner.temp }}/staging-state.json
+          STAGING_CANARY_FILE: ${{ runner.temp }}/canaries-suite.json
+          STAGING_DB_CHECKS_FILE: ${{ runner.temp }}/db-before.json
+        run: node server/dist/staging-suite.mjs before-restart
+      - name: Database assertions (before restart) — inside Render
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs db-checks "$RUNNER_TEMP/db-before.json"
+      - name: Restart (redeploy the same commit — the existing-schema release step)
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: node server/scripts/deploy-staging.mjs
+      - name: Staging suites (after restart) and cleanup
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          STAGING_STATE_FILE: ${{ runner.temp }}/staging-state.json
+          STAGING_DB_CHECKS_FILE: ${{ runner.temp }}/db-after.json
+        run: node server/dist/staging-suite.mjs after-restart
+      - name: Database assertions (after restart) — inside Render
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs db-checks "$RUNNER_TEMP/db-after.json"
+      - name: Cleanup if a suite stopped early
+        if: failure() && steps.cfg.outputs.ready == 'true'
+        env:
+          STAGING_STATE_FILE: ${{ runner.temp }}/staging-state.json
+        run: node server/dist/staging-suite.mjs cleanup || true
+      - name: Log review — Render's API log for this run, against this run's canaries
+        if: always() && steps.cfg.outputs.ready == 'true'
+        run: |
+          node server/scripts/render-ops.mjs logs --since "$STARTED_AT" --out "$RUNNER_TEMP/api.log"
+          node server/dist/log-scan.mjs "$RUNNER_TEMP/api.log" --canaries "$RUNNER_TEMP/canaries-suite.json"
+      # The state file holds QA session tokens, the canary file the values the log review looks for, the
+      # log the API's own lines: none is ever uploaded as an artifact. All live in runner.temp and die with it.
+
+  race:
+    needs: deploy-staging
+    runs-on: ubuntu-24.04 # its own runner: its own OTP budget (30 code requests per address per hour)
+    timeout-minutes: 45
+    environment: staging
+    env:
+      STAGING_ENVIRONMENT: staging
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_KEY_ID: ${{ vars.STAGING_KEY_ID }}
+      STAGING_KEY_SECRET: ${{ secrets.STAGING_KEY_SECRET }}
+      STAGING_PHONE_PREFIX: ${{ vars.STAGING_PHONE_PREFIX }}
+      STAGING_RACE_ROUNDS: '6'
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+    steps:
+      - name: Staging configured?
+        id: cfg
+        run: |
+          [ -n "$STAGING_API_URL" ] && echo "ready=true" >> "$GITHUB_OUTPUT" || echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ready == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - if: steps.cfg.outputs.ready == 'true'
+        run: npm ci --prefix server && npm --prefix server run build
+      - name: LIKE/BLOCK — both orders forced, then simultaneous rounds
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          STAGING_CANARY_FILE: ${{ runner.temp }}/canaries-race.json
+          STAGING_DB_CHECKS_FILE: ${{ runner.temp }}/db-race.json
+        run: node server/dist/staging-suite.mjs race
+      - name: Database assertions — inside Render
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs db-checks "$RUNNER_TEMP/db-race.json"
+      - name: Log review
+        if: always() && steps.cfg.outputs.ready == 'true'
+        run: |
+          node server/scripts/render-ops.mjs logs --since "$STARTED_AT" --out "$RUNNER_TEMP/api.log"
+          node server/dist/log-scan.mjs "$RUNNER_TEMP/api.log" --canaries "$RUNNER_TEMP/canaries-race.json"
+
+  deletion:
+    needs: deploy-staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    env:
+      STAGING_ENVIRONMENT: staging
+      STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+      STAGING_KEY_ID: ${{ vars.STAGING_KEY_ID }}
+      STAGING_KEY_SECRET: ${{ secrets.STAGING_KEY_SECRET }}
+      STAGING_PHONE_PREFIX: ${{ vars.STAGING_PHONE_PREFIX }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+    steps:
+      - name: Staging configured?
+        id: cfg
+        run: |
+          [ -n "$STAGING_API_URL" ] && echo "ready=true" >> "$GITHUB_OUTPUT" || echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ready == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - if: steps.cfg.outputs.ready == 'true'
+        run: npm ci --prefix server && npm --prefix server run build
+      - name: Account deletion against a live match and conversation
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          STAGING_CANARY_FILE: ${{ runner.temp }}/canaries-deletion.json
+          STAGING_DB_CHECKS_FILE: ${{ runner.temp }}/db-deletion.json
+        run: node server/dist/staging-suite.mjs deletion
+      - name: Database assertions — inside Render
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs db-checks "$RUNNER_TEMP/db-deletion.json"
+      - name: Retention DRY RUN inside Render (counts only; nothing changes)
+        if: steps.cfg.outputs.ready == 'true'
+        run: node server/scripts/render-ops.mjs job "node dist/ops.mjs retention --dry-run"
+      - name: Log review
+        if: always() && steps.cfg.outputs.ready == 'true'
+        run: |
+          node server/scripts/render-ops.mjs logs --since "$STARTED_AT" --out "$RUNNER_TEMP/api.log"
+          node server/dist/log-scan.mjs "$RUNNER_TEMP/api.log" --canaries "$RUNNER_TEMP/canaries-deletion.json"
